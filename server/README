@@ -1,0 +1,12 @@
+
+# The Master Page
+The first page of the file is used to store the pointer to the root, let’s call it the “master
+page”. The total number of pages is needed for allocating new nodes, thus it is also stored
+there.
+|   the_master_page           | pages... | tree_root | pages... |
+|   btree_root | page_used    |                 ^               ^
+            |             |                      |               |
+            +------------+----------------------+               |
+                         |                                      |
+                         +---------------------------------------+
+The function below reads the master page when initializing a database:

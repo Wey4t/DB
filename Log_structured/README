@@ -1,0 +1,44 @@
+# Log-structured storage
+
+Log-structured storage is a data storage technique that writes all changes sequentially to a log. This approach optimizes write performance and simplifies crash recovery by relying on the log as the source of truth. It is commonly used in modern databases and file systems to handle high-throughput workloads efficiently.
+
+## Update by merge: amortize cost
+
+### start with 2 files
+
+- A small file holding the recent update and a large file holding the rest of the data
+
+```mermaid
+stateDiagram
+    [*] --> Still
+    Still --> [*]
+
+    Still --> Moving
+    Moving --> Still
+    Moving --> Crash
+    Crash --> [*]
+```
+
+# B-tree
+
+## Height-balanced tree
+
+## Generalizing binary trees
+
+```mermaid
+stateDiagram
+    [1],[4],[9] --> [1,2,3,]
+    [1],[4],[9] --> [4,5,9] 
+    [1],[4],[9] --> [9,10,11]     
+```
+
+## Maintaining a B+tree
+
+ - split node
+
+```mermaid
+stateDiagram
+    [root] --> [L1]
+    [root] --> [L2]
+    [root] --> [L3]
+```
