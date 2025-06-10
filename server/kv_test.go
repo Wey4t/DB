@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/m1gwings/treedrawer/tree"
 	"github.com/stretchr/testify/assert"
 
 	. "types"
@@ -246,40 +247,41 @@ func (c *C) delete(key string) (string, bool) {
 	delete(c.ref, key)                                     // remove from reference data
 	return val, true
 }
+
+func Bnode_to_string(b BNode, id uint64) string {
+	if len(b) == 0 {
+		return "(empty)"
+	}
+	var str string
+	str += fmt.Sprintf("(%d)", id)
+	for i := uint16(0); i < b.Nkeys(); i++ {
+		str += fmt.Sprintf("%s:'%s'| ", b.GetKey(i), b.GetVal(i))
+	}
+	return str
+}
+func Print_Btree(b_node *BNode, c *C, parent *tree.Tree, id uint64) {
+	if *b_node == nil || b_node.Nkeys() == 0 {
+		return
+	}
+	parent.AddChild(tree.NodeString(Bnode_to_string(*b_node, id)))
+	new_tree := parent.Children()[len(parent.Children())-1]
+	for i := uint16(0); i < b_node.Nkeys(); i++ {
+		b_node_child := c.pages[b_node.GetPtr(i)]
+		Print_Btree(&b_node_child, c, new_tree, b_node.GetPtr(i))
+	}
+}
+
+func (c *C) debug(log string) {
+	fmt.Println("Debug:", log)
+	f := tree.NewTree(tree.NodeString("BTree Root"))
+	a := c.pages[c.tree.Root]
+	Print_Btree(&a, c, f, c.tree.Root)
+	fmt.Println(f)
+}
 func Test_kv(t *testing.T) {
 	fp, err := os.Create("test_kv.txt")
 	defer fp.Close()
-	c := newC()
 
-	c.add("k1", "hi")
-	n := BNode(c.tree.Get(1))
-	assert.Equal(t, n.Nkeys(), uint16(2), "Expected 1 key in the root node")
-	assert.Equal(t, n.GetKey(1), []byte("k1"), "Expected key 'k1' in the root node")
-	assert.Equal(t, n.GetVal(1), []byte("hi"), "Expected value 'hi' for key 'k1'")
-	// add n more keys using for loop
-	for i := 2; i <= 5; i++ {
-		key := fmt.Sprintf("ke%d", i)
-		val := fmt.Sprintf("val%d", i)
-		c.add(key, val)
-	}
-	c.add("key1", "value1")
-	// need to make a b+tree and save to test_kv.txt
-	// save c.pages to test_kv.txt and add the master page
-	var data [32]byte
-	copy(data[:16], []byte(DB_SIG))
-	binary.LittleEndian.PutUint64(data[16:], c.tree.Root)
-	// get the
-	binary.LittleEndian.PutUint64(data[24:], uint64(len(c.pages))+1)
-	// Write the master page to the file
-	if _, err := fp.WriteAt(data[:], 0); err != nil {
-		t.Fatalf("Failed to write master page: %v", err)
-	}
-	// Write the pages to the file
-	for ptr, node := range c.pages {
-		if _, err := fp.WriteAt(node, int64(ptr*BTREE_PAGE_SIZE)); err != nil {
-			t.Fatalf("Failed to write page %d: %v", ptr, err)
-		}
-	}
 	db := &KV{Path: "test_kv.txt"}
 	err = db.Open()
 	if err != nil {
@@ -294,12 +296,29 @@ func Test_kv(t *testing.T) {
 
 	// Test retrieving the value
 	val, ok := db.Get([]byte("k1"))
-	assert.True(t, ok)
-	assert.True(t, string(val) == "hi")
-	val, ok = db.Get([]byte("ke2"))
-	assert.True(t, ok)
-	assert.True(t, string(val) == "val2")
+
+	assert.True(t, !ok)
+	db.Get([]byte("ke2"))
+	assert.True(t, !ok)
 	val, ok = db.Get([]byte("key1"))
 	assert.True(t, ok)
 	assert.True(t, string(val) == "value2", "Expected value 'value1' for key 'key1'")
+	db.Set([]byte("ke3"), []byte("value2"))
+	val, ok = db.Get([]byte("ke3"))
+	assert.True(t, ok, "Expected key 'ke3' to be found")
+	assert.True(t, string(val) == "value2", "Expected value 'value2' for key 'ke3'")
+
+	// change values of ke3 and key1
+	err = db.Set([]byte("ke3"), []byte("new_value2"))
+	assert.NoError(t, err, "Expected no error when updating key 'ke3'")
+	val, ok = db.Get([]byte("ke3"))
+	assert.True(t, ok, "Expected key 'ke3' to be found after update")
+	assert.True(t, string(val) == "new_value2", "Expected updated value 'new_value2' for key 'ke3'")
+
+	err = db.Set([]byte("key1"), []byte("newkey1_value1"))
+	assert.NoError(t, err, "Expected no error when updating key 'key1'")
+	val, ok = db.Get([]byte("key1"))
+	assert.True(t, ok, "Expected key 'ke3' to be found after update")
+	assert.True(t, string(val) == "newkey1_value1", "Expected updated value 'newkey1_value1' for key 'key1'")
+
 }
