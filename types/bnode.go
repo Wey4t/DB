@@ -18,6 +18,7 @@ type BNode []byte
 const (
 	BNODE_NODE = 1 // internal nodes with pointers
 	BNODE_LEAF = 2 // leaf nodes with values
+
 )
 
 const BTREE_PAGE_SIZE = 4096

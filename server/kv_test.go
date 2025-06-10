@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/m1gwings/treedrawer/tree"
+
 	"github.com/stretchr/testify/assert"
 
 	. "types"
@@ -147,29 +149,20 @@ func Test_MasterLoad(t *testing.T) {
 }
 
 func Test_pageNew(t *testing.T) {
-	fp, err := os.Create("test_page.txt")
+	_, err := os.Create("test_page.txt")
 	if err != nil {
 		t.Fatalf("Failed to open file: %v", err)
 	}
 	defer os.Remove("test_page.txt")
 
 	db := &KV{Path: "test_page.txt"}
-	db.fp = fp
-
 	// Initialize mmap
-	size, chunk, err := mmapInit(fp)
-	if err != nil {
-		t.Fatalf("mmapInit failed: %v", err)
-	}
-	defer syscall.Munmap(chunk)
-	db.mmap.file = size
-	db.mmap.total = size
-	db.mmap.chunks = append(db.mmap.chunks, chunk)
-
+	db.Open()
+	db.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate some free pages
 	// Test creating a new page
 	db.pageNew(make([]byte, BTREE_PAGE_SIZE))
 	newPage := db.pageNew(make([]byte, BTREE_PAGE_SIZE))
-	assert.True(t, newPage == 1)
+	assert.True(t, newPage == 3)
 	assert.True(t, len(db.pageGet(newPage)) == BTREE_PAGE_SIZE)
 }
 
@@ -201,7 +194,7 @@ func newC() *C {
 	pages := map[uint64]BNode{}
 	return &C{
 		tree: BTree{
-			Get: func(ptr uint64) []byte {
+			Get: func(ptr uint64) BNode {
 				node := pages[ptr]
 				// assert(ok)
 				return node
@@ -246,60 +239,74 @@ func (c *C) delete(key string) (string, bool) {
 	delete(c.ref, key)                                     // remove from reference data
 	return val, true
 }
+
+func Bnode_to_string(b BNode, id uint64) string {
+	if len(b) == 0 {
+		return "(empty)"
+	}
+	var str string
+	str += fmt.Sprintf("(%d)", id)
+	for i := uint16(0); i < b.Nkeys(); i++ {
+		str += fmt.Sprintf("%s:'%s'| ", b.GetKey(i), b.GetVal(i))
+	}
+	return str
+}
+func Print_Btree(b_node *BNode, c *KV, parent *tree.Tree, id uint64) {
+	if *b_node == nil || b_node.Nkeys() == 0 {
+		return
+	}
+	parent.AddChild(tree.NodeString(Bnode_to_string(*b_node, id)))
+	new_tree := parent.Children()[len(parent.Children())-1]
+	for i := uint16(0); i < b_node.Nkeys(); i++ {
+		b_node_child := BNode(c.page.updates[b_node.GetPtr(i)])
+		Print_Btree(&b_node_child, c, new_tree, b_node.GetPtr(i))
+	}
+}
+
+func (c *KV) debug(log string) {
+	fmt.Println("Debug:", log)
+	f := tree.NewTree(tree.NodeString("BTree Root"))
+	a := BNode(c.page.updates[c.tree.Root])
+	Print_Btree(&a, c, f, c.tree.Root)
+	fmt.Println(f)
+}
 func Test_kv(t *testing.T) {
 	fp, err := os.Create("test_kv.txt")
 	defer fp.Close()
-	c := newC()
-
-	c.add("k1", "hi")
-	n := BNode(c.tree.Get(1))
-	assert.Equal(t, n.Nkeys(), uint16(2), "Expected 1 key in the root node")
-	assert.Equal(t, n.GetKey(1), []byte("k1"), "Expected key 'k1' in the root node")
-	assert.Equal(t, n.GetVal(1), []byte("hi"), "Expected value 'hi' for key 'k1'")
-	// add n more keys using for loop
-	for i := 2; i <= 5; i++ {
-		key := fmt.Sprintf("ke%d", i)
-		val := fmt.Sprintf("val%d", i)
-		c.add(key, val)
-	}
-	c.add("key1", "value1")
-	// need to make a b+tree and save to test_kv.txt
-	// save c.pages to test_kv.txt and add the master page
-	var data [32]byte
-	copy(data[:16], []byte(DB_SIG))
-	binary.LittleEndian.PutUint64(data[16:], c.tree.Root)
-	// get the
-	binary.LittleEndian.PutUint64(data[24:], uint64(len(c.pages))+1)
-	// Write the master page to the file
-	if _, err := fp.WriteAt(data[:], 0); err != nil {
-		t.Fatalf("Failed to write master page: %v", err)
-	}
-	// Write the pages to the file
-	for ptr, node := range c.pages {
-		if _, err := fp.WriteAt(node, int64(ptr*BTREE_PAGE_SIZE)); err != nil {
-			t.Fatalf("Failed to write page %d: %v", ptr, err)
-		}
-	}
 	db := &KV{Path: "test_kv.txt"}
 	err = db.Open()
 	if err != nil {
 		t.Fatalf("Failed to open KV store: %v", err)
 	}
+	db.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate some free pages
+
 	defer db.Close()
 	// Test inserting a key-value pair
 	err = db.Set([]byte("key1"), []byte("value2"))
 	if err != nil {
 		t.Fatalf("Insert failed: %v", err)
 	}
+	err = db.Set([]byte("key1"), []byte("value2"))
 
 	// Test retrieving the value
-	val, ok := db.Get([]byte("k1"))
+	val, ok := db.Get([]byte("key1"))
 	assert.True(t, ok)
-	assert.True(t, string(val) == "hi")
-	val, ok = db.Get([]byte("ke2"))
-	assert.True(t, ok)
-	assert.True(t, string(val) == "val2")
+	assert.True(t, string(val) == "value2")
+	// Test retrieving another value
 	val, ok = db.Get([]byte("key1"))
 	assert.True(t, ok)
-	assert.True(t, string(val) == "value2", "Expected value 'value1' for key 'key1'")
+	assert.True(t, string(val) == "value2", "Expected value 'value2' for key 'key2'")
+	// Test retrieving a non-existent key
+	val, ok = db.Get([]byte("nonexistent"))
+	assert.False(t, ok, "Expected key 'nonexistent' to not exist")
+	assert.Nil(t, val, "Expected value for non-existent key to be nil")
+	// Test deleting a key
+	val, ok = db.Get([]byte("key1"))
+	assert.True(t, ok, "Expected key 'key1' to exist before deletion")
+	err = db.Set([]byte("key3"), []byte("value3"))
+	err = db.Set([]byte("key4"), []byte("value3"))
+	err = db.Set([]byte("key5"), []byte("value3"))
+	err = db.Set([]byte("ke-3"), []byte("value3"))
+	db.debug("ad")
+	// Verify the updated value
 }
