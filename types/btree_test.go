@@ -2,7 +2,9 @@ package types
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/m1gwings/treedrawer/tree"
 	"github.com/stretchr/testify/assert"
@@ -43,7 +45,7 @@ func newC() *C {
 			},
 			Del: func(ptr uint64) {
 				// assert(pages[ptr] != nil)
-				delete(pages, ptr)
+				// delete(pages, ptr)
 			},
 		},
 		ref:   map[string]string{},
@@ -59,8 +61,8 @@ func (c *C) delete(key string) (string, bool) {
 	if !ok {
 		return "", false // key not found
 	}
-	TreeDelete(&c.tree, c.pages[c.tree.Root], []byte(key)) // delete from the tree
-	delete(c.ref, key)                                     // remove from reference data
+	c.pages[c.tree.Root] = TreeDelete(&c.tree, c.pages[c.tree.Root], []byte(key)) // delete from the tree
+	delete(c.ref, key)                                                            // remove from reference data
 	return val, true
 }
 func print_pages(page BNode, pages *map[uint64]BNode, t *testing.T, p uint64) {
@@ -100,12 +102,12 @@ func Bnode_to_string(b BNode, id uint64) string {
 	var str string
 	str += fmt.Sprintf("(%d)", id)
 	for i := uint16(0); i < b.Nkeys(); i++ {
-		str += fmt.Sprintf("%s:'%s'| ", b.GetKey(i), b.GetVal(i))
+		str += fmt.Sprintf("%s:| ", b.GetKey(i))
 	}
 	return str
 }
 func Print_Btree(b_node *BNode, c *C, parent *tree.Tree, id uint64) {
-	if *b_node == nil || b_node.Nkeys() == 0 {
+	if len(*b_node) == 0 || b_node.Nkeys() == 0 {
 		return
 	}
 	parent.AddChild(tree.NodeString(Bnode_to_string(*b_node, id)))
@@ -123,40 +125,68 @@ func (c *C) debug(log string) {
 	Print_Btree(&a, c, f, c.tree.Root)
 	fmt.Println(f)
 }
+
+const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+func randomString(length int) string {
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(b)
+}
+func randomInt(min, max int) int {
+	return rand.Intn(max-min+1) + min
+}
 func Test_btree(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
 	c := newC()
 
-	c.add("k1", "hi")
-	n := BNode(c.tree.Get(1))
-	assert.Equal(t, n.Nkeys(), uint16(2), "Expected 1 key in the root node")
-	assert.Equal(t, n.GetKey(1), []byte("k1"), "Expected key 'k1' in the root node")
-	assert.Equal(t, n.GetVal(1), []byte("hi"), "Expected value 'hi' for key 'k1'")
-	// add n more keys using for loop
-	for i := 2; i <= 5; i++ {
-		key := fmt.Sprintf("ke%d", i)
-		val := fmt.Sprintf("val%d", i)
+	// for i := 0; i <= 5; i++ {
+	// 	key := fmt.Sprintf("k%d", i)
+	// 	// val is n length string, a very long string
+	// 	// make a very long string
+	// 	val := fmt.Sprintf("bbbd%d", i)
+	// 	c.add(key, val)
+	// }
+	// c.add("ka", "bbbd0")
+	// c.add("kb", "bbbd0")
+	// c.add("kc", "bbbd0")
+	// c.add("kd", "bbbd0")
+	// c.add("ke", "bbbd0")
+	// c.add("kf", "bbbd0")
+	// c.add("kg", "bbbd0")
+	keys := [][]string{}
+	for i := 0; i <= 10; i++ {
+		key := randomString(4)
+		val := randomString(4) // make a very long string
+		keys = append(keys, []string{key, val})
 		c.add(key, val)
 	}
-	c.delete("k1")
-	c.debug("k1")
+	for i := 0; i <= 10; i++ {
+		choose := randomInt(0, len(keys)-1)
+		key, _val := keys[choose][0], keys[choose][1]
+		// remove the key from the slice to avoid duplicates
+		keys = append(keys[:choose], keys[choose+1:]...)
+		val, ok := c.delete(key)
+		assert.True(t, ok, "Failed to delete key %s", key)
+		assert.Equal(t, val, _val, "Deleted value does not match reference value")
+	}
+	for i := 0; i <= 10; i++ {
+		key := randomString(4)
+		val := randomString(4) // make a very long string
+		keys = append(keys, []string{key, val})
 
-	c.delete("k2")
-	c.debug("k2")
-
-	c.delete("k3")
-	c.debug("k3")
-	c.delete("k4")
-	c.delete("k5")
-	c.debug("all")
-	for i := 0; i <= 5; i++ {
-		key := fmt.Sprintf("k%d", i)
-		val := fmt.Sprintf("val%d", i)
 		c.add(key, val)
 	}
-	c.debug("100")
-	fmt.Println(c.ref)
-	c.delete("k3")
-	c.delete("k4")
-	c.delete("k5")
-	c.debug("after delete k3, k4, k5")
+	for i := 0; i <= 10; i++ {
+		choose := randomInt(0, len(keys)-1)
+		key, _val := keys[choose][0], keys[choose][1]
+		// remove the key from the slice to avoid duplicates
+		keys = append(keys[:choose], keys[choose+1:]...)
+		val, ok := c.delete(key)
+		assert.True(t, ok, "Failed to delete key %s", key)
+		assert.Equal(t, val, _val, "Deleted value does not match reference value")
+	}
+
 }

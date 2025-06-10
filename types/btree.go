@@ -14,29 +14,46 @@ type BTree struct {
 }
 
 func treeInsert(tree *BTree, node BNode, key []byte, val []byte) BNode {
-	// The extra size allows it to exceed 1 page temporarily.
+	// the result node.
+	// it's allowed to be bigger than 1 page and will be split if so
 	new := BNode(make([]byte, 2*BTREE_PAGE_SIZE))
 	// where to insert the key?
-	idx := nodeLookupLE(node, key) // node.getKey(idx) <= key
+	idx := nodeLookupLE(node, key)
+	// act depending on the node type
 	switch node.Ntype() {
-	case BNODE_LEAF: // leaf node
+	case BNODE_LEAF:
+		// leaf, node.getKey(idx) <= key
 		if bytes.Equal(key, node.GetKey(idx)) {
-			LeafUpdate(new, node, idx, key, val) // found, update it
+			// found the key, update it.
+			LeafUpdate(new, node, idx, key, val)
 		} else {
-			LeafInsert(new, node, idx+1, key, val) // not found, insert
+			// insert it after the position.
+			LeafInsert(new, node, idx+1, key, val)
 		}
 	case BNODE_NODE:
-		// recursive insertion to the kid node
-		kptr := node.GetPtr(idx)
-		knode := treeInsert(tree, tree.Get(kptr), key, val)
-		// after insertion, split the result
-		nsplit, split := NodeSplit3(knode)
-		// deallocate the old kid node
-		tree.Del(kptr)
-		// update the kid links
-		NodeReplaceKidN(tree, new, node, idx, split[:nsplit]...)
+		// internal node, insert it to a kid node.
+		nodeInsert(tree, new, node, idx, key, val)
+	default:
+		panic("bad node!")
 	}
 	return new
+}
+
+// part of the treeInsert(): KV insertion to an internal node
+func nodeInsert(
+	tree *BTree, new BNode, node BNode, idx uint16,
+	key []byte, val []byte,
+) {
+	// get and deallocate the kid node
+	kptr := node.GetPtr(idx)
+	knode := tree.Get(kptr)
+	tree.Del(kptr)
+	// recursive insertion to the kid node
+	knode = treeInsert(tree, knode, key, val)
+	// split the result
+	nsplit, splited := NodeSplit3(knode)
+	// update the kid links
+	NodeReplaceKidN(tree, new, node, idx, splited[:nsplit]...)
 }
 func TreefindKey(tree *BTree, node BNode, key []byte) ([]byte, bool) {
 	// find the key in the node
@@ -64,9 +81,10 @@ func (tree *BTree) Read(key []byte) ([]byte, bool) {
 	node := BNode(tree.Get(tree.Root))
 	return TreefindKey(tree, node, key)
 }
+
 func (tree *BTree) Delete(key []byte) bool {
-	// assert(len(key) != 0)
-	// assert(len(key) <= BTREE_MAX_KEY_SIZE)
+	checkAssertion(len(key) != 0)
+	checkAssertion(len(key) <= BTREE_MAX_KEY_SIZE)
 	if tree.Root == 0 {
 		return false
 	}
@@ -97,47 +115,40 @@ func (tree *BTree) Insert(key []byte, val []byte) error {
 		nodeAppendKV(root, 0, 0, nil, nil)
 		nodeAppendKV(root, 1, 0, key, val)
 		tree.Root = tree.New(root)
-		tree.Root = tree.New(root)
 		return nil
 	}
-	// 3. insert the key
-	node := treeInsert(tree, tree.Get(tree.Root), key, val)
-	// 4. grow the tree if the root is split
-	nsplit, split := NodeSplit3(node)
+	node := tree.Get(tree.Root)
 	tree.Del(tree.Root)
+	node = treeInsert(tree, node, key, val)
+	nsplit, splitted := NodeSplit3(node)
 	if nsplit > 1 {
+		// the root was split, add a new level.
 		root := BNode(make([]byte, BTREE_PAGE_SIZE))
 		root.SetHeader(BNODE_NODE, nsplit)
-		for i, knode := range split[:nsplit] {
+		for i, knode := range splitted[:nsplit] {
 			ptr, key := tree.New(knode), knode.GetKey(0)
 			nodeAppendKV(root, uint16(i), ptr, key, nil)
 		}
 		tree.Root = tree.New(root)
 	} else {
-		tree.Root = tree.New(split[0])
+		tree.Root = tree.New(splitted[0])
 	}
 	return nil
 }
 
 // remove a key from a leaf node
-func leafDelete(new *BNode, old BNode, idx uint16) {
-	// remove the key from the leaf node
-	if idx < old.Nkeys() {
-		new.SetHeader(BNODE_LEAF, old.Nkeys()-1)
-		nodeAppendRange(*new, old, 0, 0, idx)                     // copy left part
-		nodeAppendRange(*new, old, idx, idx+1, old.Nkeys()-idx-1) // copy right part skip kv at idx
-	} else {
-		new.SetHeader(BNODE_LEAF, old.Nkeys())
-		nodeAppendRange(*new, old, 0, 0, old.Nkeys())
-	}
+func leafDelete(new BNode, old BNode, idx uint16) {
+	new.SetHeader(BNODE_LEAF, old.Nkeys()-1)
+	nodeAppendRange(new, old, 0, 0, idx)
+	nodeAppendRange(new, old, idx, idx+1, old.Nkeys()-(idx+1))
 }
 
 // merge 2 nodes into 1
 func nodeMerge(new BNode, left BNode, right BNode) {
-	// assert(left.Ntype() == right.Ntype())
+	checkAssertion(left.Ntype() == right.Ntype())
 	new.SetHeader(left.Ntype(), left.Nkeys()+right.Nkeys())
-	nodeAppendRange(new, left, 0, 0, left.Nkeys())   // copy left
-	nodeAppendRange(new, right, 0, 0, right.Nkeys()) // copy right
+	nodeAppendRange(new, left, 0, 0, left.Nkeys()) // copy left
+	nodeAppendRange(new, right, left.Nkeys(), 0, right.Nkeys())
 	// reset the pointers for the merged node
 	for i := uint16(0); i < new.Nkeys(); i++ {
 		new.SetPtr(i, new.GetPtr(i))
@@ -147,58 +158,57 @@ func nodeMerge(new BNode, left BNode, right BNode) {
 
 // replace 2 adjacent links with 1
 func nodeReplace2Kid(new BNode, old BNode, idx uint16, ptr uint64, key []byte) {
-	new.SetHeader(BNODE_NODE, old.Nkeys()+1)
-	nodeAppendRange(new, old, 0, 0, idx)                         // copy left part
-	nodeAppendKV(new, idx, ptr, key, nil)                        // replace idx with new kid
-	nodeAppendRange(new, old, idx+1, idx+2, old.Nkeys()-(idx+1)) // copy right part
+	new.SetHeader(BNODE_NODE, old.Nkeys()-1)
+	nodeAppendRange(new, old, 0, 0, idx)
+	nodeAppendKV(new, idx, ptr, key, nil)
+	nodeAppendRange(new, old, idx+1, idx+2, new.Nkeys()-(idx+1))
 }
 
 // should the updated kid be merged with a sibling?
-func shouldMerge(
-	tree *BTree, node BNode, idx uint16, updated BNode,
-) (int, BNode) {
-	// only leaf nodes can be merged when updated size is small
+func shouldMerge(tree *BTree, node BNode, idx uint16, updated BNode) (int, BNode) {
 	if updated.Nbytes() > BTREE_PAGE_SIZE/4 {
 		return 0, BNode{}
 	}
+
 	if idx > 0 {
 		sibling := BNode(tree.Get(node.GetPtr(idx - 1)))
-		// why - 4? because we need to account for the header size
-		merged := sibling.Nbytes() + updated.Nbytes() - 4
+		merged := sibling.Nbytes() + updated.Nbytes() - HEADER
 		if merged <= BTREE_PAGE_SIZE {
-			return -1, sibling // left
+			return -1, sibling
 		}
 	}
+
 	if idx+1 < node.Nkeys() {
 		sibling := BNode(tree.Get(node.GetPtr(idx + 1)))
-		merged := sibling.Nbytes() + updated.Nbytes() - 4
+		merged := sibling.Nbytes() + updated.Nbytes() - HEADER
 		if merged <= BTREE_PAGE_SIZE {
-			return +1, sibling // right
+			return +1, sibling
 		}
 	}
+
 	return 0, BNode{}
 }
 
 // delete a key from the tree
 func TreeDelete(tree *BTree, node BNode, key []byte) BNode {
-	if node.Ntype() == BNODE_LEAF {
-		idx := nodeLookupLE(node, key)
-		if idx >= node.Nkeys() || !bytes.Equal(node.GetKey(idx), key) {
+	// where to find the key?
+	idx := nodeLookupLE(node, key)
+	// act depending on the node type
+	switch node.Ntype() {
+	case BNODE_LEAF:
+		if !bytes.Equal(key, node.GetKey(idx)) {
 			return BNode{} // not found
 		}
+		// delete the key in the leaf
 		new := BNode(make([]byte, BTREE_PAGE_SIZE))
-		leafDelete(&new, node, idx)
-		if new.Nkeys() == 0 {
-			return BNode{} // empty leaf
-		}
+		leafDelete(new, node, idx)
 		return new
-	} else if node.Ntype() == BNODE_NODE {
-		idx := nodeLookupLE(node, key)
-		new := nodeDelete(tree, node, idx, key)
-		copy(node, new)
-		return new
+	case BNODE_NODE:
+		return nodeDelete(tree, node, idx, key)
+	default:
+		panic("bad node!")
 	}
-	return BNode{} // invalid node type
+	// recurse into the kid
 }
 
 // delete a key from an internal node; part of the treeDelete()
@@ -243,17 +253,13 @@ func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
 	kptr := node.GetPtr(idx)
 	updated := TreeDelete(tree, tree.Get(kptr), key)
 	if len(updated) == 0 {
-		// byte to string
-		new := BNode(make([]byte, BTREE_PAGE_SIZE))
-
-		NodeDeleteKV(new, node, idx)
-		copy(node, new)
 		return BNode{} // not found
 	}
 	tree.Del(kptr)
-	// check for merging
 	new := BNode(make([]byte, BTREE_PAGE_SIZE))
+	// check for merging
 	mergeDir, sibling := shouldMerge(tree, node, idx, updated)
+
 	switch {
 	case mergeDir < 0: // left
 		merged := BNode(make([]byte, BTREE_PAGE_SIZE))
@@ -265,11 +271,7 @@ func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
 		nodeMerge(merged, updated, sibling)
 		tree.Del(node.GetPtr(idx + 1))
 		nodeReplace2Kid(new, node, idx, tree.New(merged), merged.GetKey(0))
-	case mergeDir == 0 && updated.Nkeys() == 0:
-		// assert(node.nkeys() == 1 && idx == 0) // 1 empty child but no sibling
-		node.SetPtr(idx, 0)          // update the pointer
-		new.SetHeader(BNODE_NODE, 0) // the parent becomes empty too
-	case mergeDir == 0 && updated.Nkeys() > 0: // no merge
+	case mergeDir == 0:
 		NodeReplaceKidN(tree, new, node, idx, updated)
 	}
 	return new

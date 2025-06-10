@@ -20,11 +20,16 @@ const (
 	BNODE_LEAF = 2 // leaf nodes with values
 
 )
-
-const BTREE_PAGE_SIZE = 4096
+const HEADER = 4
+const BTREE_PAGE_SIZE = 128
 const BTREE_MAX_KEY_SIZE = 1000
 const BTREE_MAX_VAL_SIZE = 3000
 
+func checkAssertion(cond bool) {
+	if !cond {
+		panic("Assertion failed")
+	}
+}
 func (node BNode) Ntype() uint16 {
 	return binary.LittleEndian.Uint16(node[0:2])
 }
@@ -39,12 +44,14 @@ func (node BNode) SetHeader(btype uint16, nkeys uint16) {
 
 // read and write the child pointers array
 func (node BNode) GetPtr(idx uint16) uint64 {
-	// assert(idx < node.nkeys())
+
+	checkAssertion(idx < node.Nkeys())
 	pos := 4 + 8*idx
 	return binary.LittleEndian.Uint64(node[pos:])
 }
 func (node BNode) SetPtr(idx uint16, val uint64) {
-	// assert(idx < node.nkeys())
+
+	checkAssertion(idx < node.Nkeys())
 	pos := 4 + 8*idx
 	binary.LittleEndian.PutUint64(node[pos:], val)
 }
@@ -60,17 +67,17 @@ func (node BNode) GetOffset(idx uint16) uint16 {
 	return binary.LittleEndian.Uint16(node[pos:])
 }
 func (node BNode) kvPos(idx uint16) uint16 {
-	// assert(idx <= node.nkeys())
+	checkAssertion(idx <= node.Nkeys())
 	return 4 + 8*node.Nkeys() + 2*node.Nkeys() + node.GetOffset(idx)
 }
 func (node BNode) GetKey(idx uint16) []byte {
-	// assert(idx < node.nkeys())
+	checkAssertion(idx < node.Nkeys())
 	pos := node.kvPos(idx)
 	klen := binary.LittleEndian.Uint16(node[pos:])
 	return node[pos+4:][:klen]
 }
 func (node BNode) GetVal(idx uint16) []byte {
-	// assert(idx < node.nkeys())
+	checkAssertion(idx < node.Nkeys())
 	pos := node.kvPos(idx)
 	klen := binary.LittleEndian.Uint16(node[pos+0:])
 	vlen := binary.LittleEndian.Uint16(node[pos+2:])
@@ -113,17 +120,46 @@ func NodeDeleteKV(new BNode, old BNode, target uint16) {
 	}
 
 }
+func nodeAppendRange(
+	new BNode, old BNode,
+	dstNew uint16, srcOld uint16, n uint16,
+) {
+	checkAssertion(srcOld+n <= old.Nkeys())
+	checkAssertion(dstNew+n <= new.Nkeys())
+	// print the key in old
+	if n == 0 {
+		return
+	}
+	// pointers
+	for i := uint16(0); i < n; i++ {
+		new.SetPtr(dstNew+i, old.GetPtr(srcOld+i))
+	}
+	// offsets
+	dstBegin := new.GetOffset(dstNew)
+	srcBegin := old.GetOffset(srcOld)
+	for i := uint16(1); i <= n; i++ { // NOTE: the range is [1, n]
+		offset := dstBegin + old.GetOffset(srcOld+i) - srcBegin
+		new.SetOffset(dstNew+i, offset)
+	}
+	// KVs
+	begin := old.kvPos(srcOld)
+	end := old.kvPos(srcOld + n)
+
+	copy(new[new.kvPos(dstNew):], old[begin:end])
+}
 
 // copy multiple keys, values, and pointers into the position
-func nodeAppendRange(
-	new BNode, old BNode, dstNew uint16, srcOld uint16, n uint16,
-) {
-	for i := uint16(0); i < n; i++ {
-		dst, src := dstNew+i, srcOld+i
-		nodeAppendKV(new, dst,
-			old.GetPtr(src), old.GetKey(src), old.GetVal(src))
-	}
-}
+// func nodeAppendRange(
+//
+//	new BNode, old BNode, dstNew uint16, srcOld uint16, n uint16,
+//
+//	) {
+//		for i := uint16(0); i < n; i++ {
+//			dst, src := dstNew+i, srcOld+i
+//			nodeAppendKV(new, dst,
+//				old.GetPtr(src), old.GetKey(src), old.GetVal(src))
+//		}
+//	}
 func LeafUpdate(
 	new BNode, old BNode, idx uint16, key []byte, val []byte,
 ) {
@@ -160,7 +196,7 @@ func nodeSplit2(left BNode, right BNode, old BNode) {
 	for left_bytes() > BTREE_PAGE_SIZE {
 		nleft--
 	}
-	// assert(nleft >= 1)
+	checkAssertion(nleft >= 1)
 	// try to fit the right half
 	right_bytes := func() uint16 {
 		return old.Nbytes() - left_bytes() + 4
@@ -168,7 +204,7 @@ func nodeSplit2(left BNode, right BNode, old BNode) {
 	for right_bytes() > BTREE_PAGE_SIZE {
 		nleft++
 	}
-	// assert(nleft < old.nkeys())
+	checkAssertion(nleft < old.Nkeys())
 	nright := old.Nkeys() - nleft
 	// new nodes
 	left.SetHeader(old.Ntype(), nleft)
@@ -176,7 +212,7 @@ func nodeSplit2(left BNode, right BNode, old BNode) {
 	nodeAppendRange(left, old, 0, 0, nleft)
 	nodeAppendRange(right, old, 0, nleft, nright)
 	// NOTE: the left half may be still too big
-	// assert(right.Nbytes() <= BTREE_PAGE_SIZE)
+	checkAssertion(right.Nbytes() <= BTREE_PAGE_SIZE)
 }
 func NodeReplaceKidN(
 	tree *BTree, new BNode, old BNode, idx uint16,
@@ -205,6 +241,6 @@ func NodeSplit3(old BNode) (uint16, [3]BNode) {
 	leftleft := BNode(make([]byte, BTREE_PAGE_SIZE))
 	middle := BNode(make([]byte, BTREE_PAGE_SIZE))
 	nodeSplit2(leftleft, middle, left)
-	// assert(leftleft.nbytes() <= BTREE_PAGE_SIZE)
+	checkAssertion(leftleft.Nbytes() <= BTREE_PAGE_SIZE)
 	return 3, [3]BNode{leftleft, middle, right} // 3 nodes
 }

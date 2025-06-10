@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/m1gwings/treedrawer/tree"
-
 	"github.com/stretchr/testify/assert"
 
 	. "types"
@@ -251,22 +250,22 @@ func Bnode_to_string(b BNode, id uint64) string {
 	}
 	return str
 }
-func Print_Btree(b_node *BNode, c *KV, parent *tree.Tree, id uint64) {
+func Print_Btree(b_node *BNode, c *C, parent *tree.Tree, id uint64) {
 	if *b_node == nil || b_node.Nkeys() == 0 {
 		return
 	}
 	parent.AddChild(tree.NodeString(Bnode_to_string(*b_node, id)))
 	new_tree := parent.Children()[len(parent.Children())-1]
 	for i := uint16(0); i < b_node.Nkeys(); i++ {
-		b_node_child := BNode(c.page.updates[b_node.GetPtr(i)])
+		b_node_child := c.pages[b_node.GetPtr(i)]
 		Print_Btree(&b_node_child, c, new_tree, b_node.GetPtr(i))
 	}
 }
 
-func (c *KV) debug(log string) {
+func (c *C) debug(log string) {
 	fmt.Println("Debug:", log)
 	f := tree.NewTree(tree.NodeString("BTree Root"))
-	a := BNode(c.page.updates[c.tree.Root])
+	a := c.pages[c.tree.Root]
 	Print_Btree(&a, c, f, c.tree.Root)
 	fmt.Println(f)
 }
@@ -289,24 +288,30 @@ func Test_kv(t *testing.T) {
 	err = db.Set([]byte("key1"), []byte("value2"))
 
 	// Test retrieving the value
-	val, ok := db.Get([]byte("key1"))
-	assert.True(t, ok)
-	assert.True(t, string(val) == "value2")
-	// Test retrieving another value
+	val, ok := db.Get([]byte("k1"))
+
+	assert.True(t, !ok)
+	db.Get([]byte("ke2"))
+	assert.True(t, !ok)
 	val, ok = db.Get([]byte("key1"))
 	assert.True(t, ok)
-	assert.True(t, string(val) == "value2", "Expected value 'value2' for key 'key2'")
-	// Test retrieving a non-existent key
-	val, ok = db.Get([]byte("nonexistent"))
-	assert.False(t, ok, "Expected key 'nonexistent' to not exist")
-	assert.Nil(t, val, "Expected value for non-existent key to be nil")
-	// Test deleting a key
+	assert.True(t, string(val) == "value2", "Expected value 'value1' for key 'key1'")
+	db.Set([]byte("ke3"), []byte("value2"))
+	val, ok = db.Get([]byte("ke3"))
+	assert.True(t, ok, "Expected key 'ke3' to be found")
+	assert.True(t, string(val) == "value2", "Expected value 'value2' for key 'ke3'")
+
+	// change values of ke3 and key1
+	err = db.Set([]byte("ke3"), []byte("new_value2"))
+	assert.NoError(t, err, "Expected no error when updating key 'ke3'")
+	val, ok = db.Get([]byte("ke3"))
+	assert.True(t, ok, "Expected key 'ke3' to be found after update")
+	assert.True(t, string(val) == "new_value2", "Expected updated value 'new_value2' for key 'ke3'")
+
+	err = db.Set([]byte("key1"), []byte("newkey1_value1"))
+	assert.NoError(t, err, "Expected no error when updating key 'key1'")
 	val, ok = db.Get([]byte("key1"))
-	assert.True(t, ok, "Expected key 'key1' to exist before deletion")
-	err = db.Set([]byte("key3"), []byte("value3"))
-	err = db.Set([]byte("key4"), []byte("value3"))
-	err = db.Set([]byte("key5"), []byte("value3"))
-	err = db.Set([]byte("ke-3"), []byte("value3"))
-	db.debug("ad")
-	// Verify the updated value
+	assert.True(t, ok, "Expected key 'ke3' to be found after update")
+	assert.True(t, string(val) == "newkey1_value1", "Expected updated value 'newkey1_value1' for key 'key1'")
+
 }
