@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"syscall"
@@ -283,6 +284,7 @@ func Test_kv(t *testing.T) {
 	defer fp.Close()
 	db := &KV{Path: "test_kv.txt"}
 	err = db.Open()
+	defer os.Remove("test_kv.txt")
 	if err != nil {
 		t.Fatalf("Failed to open KV store: %v", err)
 	}
@@ -332,15 +334,150 @@ func Test_kv(t *testing.T) {
 	assert.True(t, !ok, "Expected key 'ke3' to be found after deletion")
 	assert.True(t, val == nil, "Expected value to be nil after deletion of key 'ke3'")
 	// set 10 random keys
-	// for i := 0; i < 3; i++ {
-	// 	key := randomString(123)
-	// 	val := randomString(222)
-	// 	err = db.Set([]byte(key), []byte(val))
-	// 	assert.NoError(t, err, "Expected no error when inserting key-value pair")
-	// 	retrievedVal, ok := db.Get([]byte(key))
-	// 	assert.True(t, ok, "Expected key to be found after insertion")
-	// 	assert.Equal(t, val, string(retrievedVal), "Expected retrieved value to match inserted value")
-	// }
-	db.debug("After inserting random keys")
+	for i := 0; i < 6; i++ {
+		key := randomString(12)
+		val := randomString(22)
+		err = db.Set([]byte(key), []byte(val))
+		assert.NoError(t, err, "Expected no error when inserting key-value pair")
+		retrievedVal, ok := db.Get([]byte(key))
+		assert.True(t, ok, "Expected key to be found after insertion")
+		assert.Equal(t, val, string(retrievedVal), "Expected retrieved value to match inserted value")
+	}
+	// db.debug("After inserting random keys")
+
 	db.Del([]byte("key1"))
+}
+
+func Test_KV(t *testing.T) {
+	fmt.Println("=== Simple KV Sequential Test ===")
+
+	// Open database
+	path := "test.db"
+	db := &KV{Path: path}
+	fp, err := os.Create(path)
+	err = db.Open()
+	defer fp.Close()
+	defer os.Remove(path)
+	if err != nil {
+		t.Fatalf("Failed to open KV store: %v", err)
+	}
+	db.page.updates = make(map[uint64][]byte)          // simulate some free pages
+	db.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate a master page
+
+	// db.free.Update(db.page.nfree, []uint64{})          // initialize free list
+
+	defer db.Close()
+	fmt.Println("\n1. Setting keys...")
+
+	err = db.Set([]byte("key1"), []byte("value1"))
+	if err != nil {
+		log.Printf("Set key1 failed: %v", err)
+	} else {
+		fmt.Println("✅ Set key1 -> value1")
+	}
+
+	err = db.Set([]byte("key2"), []byte("value2"))
+	if err != nil {
+		log.Printf("Set key2 failed: %v", err)
+	} else {
+		fmt.Println("✅ Set key2 -> value2")
+	}
+
+	err = db.Set([]byte("key3"), []byte("value3"))
+	if err != nil {
+		log.Printf("Set key3 failed: %v", err)
+	} else {
+		fmt.Println("✅ Set key3 -> value3")
+	}
+
+	// Test 2: Get the keys
+	fmt.Println("\n2. Getting keys...")
+
+	val, found := db.Get([]byte("key1"))
+	if found {
+		fmt.Printf("✅ Get key1 -> %s\n", val)
+	} else {
+		fmt.Println("❌ Get key1 -> not found")
+	}
+
+	val, found = db.Get([]byte("key2"))
+	if found {
+		fmt.Printf("✅ Get key2 -> %s\n", val)
+	} else {
+		fmt.Println("❌ Get key2 -> not found")
+	}
+
+	val, found = db.Get([]byte("key3"))
+	if found {
+		fmt.Printf("✅ Get key3 -> %s\n", val)
+	} else {
+		fmt.Println("❌ Get key3 -> not found")
+	}
+
+	// Test 3: Delete some keys
+	fmt.Println("\n3. Deleting keys...")
+
+	deleted, err := db.Del([]byte("key2"))
+	if err != nil {
+		log.Printf("Delete key2 failed: %v", err)
+	} else if deleted {
+		fmt.Println("✅ Deleted key2")
+	} else {
+		fmt.Println("❌ Delete key2 -> not found")
+	}
+
+	// Test 4: Get after delete
+	fmt.Println("\n4. Getting after delete...")
+
+	val, found = db.Get([]byte("key1"))
+	if found {
+		fmt.Printf("✅ Get key1 -> %s (still exists)\n", val)
+	} else {
+		fmt.Println("❌ Get key1 -> not found")
+	}
+
+	val, found = db.Get([]byte("key2"))
+	if found {
+		fmt.Printf("❌ Get key2 -> %s (should be deleted!)\n", val)
+	} else {
+		fmt.Println("✅ Get key2 -> not found (correctly deleted)")
+	}
+
+	val, found = db.Get([]byte("key3"))
+	if found {
+		fmt.Printf("✅ Get key3 -> %s (still exists)\n", val)
+	} else {
+		fmt.Println("❌ Get key3 -> not found")
+	}
+
+	// Test 5: Update existing key
+	fmt.Println("\n5. Updating existing key...")
+
+	err = db.Set([]byte("key1"), []byte("updated_value"))
+	if err != nil {
+		log.Printf("Update key1 failed: %v", err)
+	} else {
+		fmt.Println("✅ Updated key1")
+	}
+
+	val, found = db.Get([]byte("key1"))
+	if found {
+		fmt.Printf("✅ Get key1 -> %s (updated)\n", val)
+	} else {
+		fmt.Println("❌ Get key1 -> not found")
+	}
+
+	// Test 6: Delete non-existent key
+	fmt.Println("\n6. Deleting non-existent key...")
+
+	deleted, err = db.Del([]byte("nonexistent"))
+	if err != nil {
+		log.Printf("Delete nonexistent failed: %v", err)
+	} else if deleted {
+		fmt.Println("❌ Delete nonexistent -> returned true (should be false)")
+	} else {
+		fmt.Println("✅ Delete nonexistent -> correctly returned false")
+	}
+
+	fmt.Println("\n=== Test Complete ===")
 }

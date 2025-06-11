@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/binary"
+	"fmt"
 	. "types"
 )
 
@@ -11,6 +12,7 @@ import (
 
 const BNODE_FREE_LIST = 3
 const FREE_LIST_HEADER = 4 + 8 + 8
+
 const FREE_LIST_CAP = (BTREE_PAGE_SIZE - FREE_LIST_HEADER) / 8
 
 type FreeList struct {
@@ -44,7 +46,7 @@ func flnSetPtr(node BNode, idx int, ptr uint64) {
 func flnSetHeader(node BNode, size uint16, next uint64) {
 	binary.LittleEndian.PutUint16(node[0:2], BNODE_FREE_LIST)
 	binary.LittleEndian.PutUint16(node[2:4], size)
-	binary.LittleEndian.PutUint64(node[4:12], next)
+	binary.LittleEndian.PutUint64(node[12:20], next)
 }
 func flnSetTotal(node BNode, total uint64) {
 	binary.LittleEndian.PutUint64(node[4:12], total)
@@ -130,4 +132,52 @@ func (fl *FreeList) Update(popn int, freed []uint64) {
 	flPush(fl, freed, reuse)
 	// done
 	flnSetTotal(fl.get(fl.head), uint64(total+len(freed)))
+}
+
+func (fl *FreeList) DebugPrint() {
+	fmt.Println("\n=== FREE LIST DEBUG ===")
+	fmt.Printf("Head: %d\n", fl.head)
+	fmt.Printf("Total Free Pages: %d\n", fl.Total())
+
+	if fl.head == 0 {
+		fmt.Println("Free list is empty")
+		return
+	}
+
+	nodeNum := 1
+	current := fl.head
+	totalFound := 0
+
+	for current != 0 {
+		node := fl.get(current)
+		size := flnSize(node)
+		next := flnNext(node)
+
+		fmt.Printf("\n--- Node %d (Page %d) ---\n", nodeNum, current)
+		fmt.Printf("  Size: %d pointers\n", size)
+		fmt.Printf("  Total: %d\n", binary.LittleEndian.Uint64(node[4:12]))
+		fmt.Printf("  Next: %d\n", next)
+		fmt.Printf("  Pointers: [")
+
+		for i := 0; i < size; i++ {
+			if i > 0 {
+				fmt.Print(", ")
+			}
+			fmt.Printf("%d", flnPtr(node, i))
+		}
+		fmt.Printf("]\n")
+
+		totalFound += size
+		nodeNum++
+		current = next
+
+		// Safety check to prevent infinite loops
+		if nodeNum > 100 {
+			fmt.Printf("  ... (truncated - too many nodes)")
+			break
+		}
+	}
+
+	fmt.Printf("\nSummary: %d nodes, %d total pointers found\n", nodeNum-1, totalFound)
+	fmt.Printf("========================\n")
 }

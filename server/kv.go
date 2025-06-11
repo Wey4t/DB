@@ -218,6 +218,8 @@ func (db *KV) Open() error {
 	db.free.get = db.pageGet
 	db.free.new = db.pageAppend
 	db.free.use = db.pageUse
+	db.page.nappend = 0
+	db.page.nfree = 0
 	// free list
 	// read the master page
 	err = masterLoad(db)
@@ -233,6 +235,8 @@ fail:
 
 // cleanups
 func (db *KV) Close() {
+	masterStore(db) // update the master page
+
 	for _, chunk := range db.mmap.chunks {
 		err := syscall.Munmap(chunk)
 		checkAssertion(err == nil)
@@ -290,8 +294,7 @@ func writePages(db *KV) error {
 	}
 	db.free.Update(db.page.nfree, freed)
 	// extend the file & mmap if needed
-	npages := int(db.page.flushed) + db.page.nappend
-	fmt.Println("npages:", npages, "flushed:", db.page.flushed, "temp:", len(db.page.temp), "nappend:", db.page.nappend)
+	npages := int(db.page.flushed) + len(db.page.temp) + db.page.nappend
 	if err := extendFile(db, npages); err != nil {
 		return err
 	}
