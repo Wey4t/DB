@@ -8,7 +8,7 @@ type BTree struct {
 	// Root pointer (a nonzero page number)
 	Root uint64
 	// callbacks for managing on-disk pages
-	Get func(uint64) []byte // read data from a page number
+	Get func(uint64) BNode  // read data from a page number
 	New func([]byte) uint64 // allocate a new page number with data
 	Del func(uint64)        // deallocate a page number
 }
@@ -62,6 +62,9 @@ func TreefindKey(tree *BTree, node BNode, key []byte) ([]byte, bool) {
 	case BNODE_LEAF: // leaf node
 		if idx <= node.Nkeys()-1 && bytes.Equal(node.GetKey(idx), key) {
 			val := node.GetVal(idx)
+			return val, true // found
+		} else if idx+1 <= node.Nkeys()-1 && bytes.Equal(node.GetKey(idx+1), key) {
+			val := node.GetVal(idx + 1)
 			return val, true // found
 		}
 	case BNODE_NODE:

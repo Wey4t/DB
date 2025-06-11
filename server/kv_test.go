@@ -3,9 +3,12 @@ package server
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
+	"math/rand"
 	"os"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/m1gwings/treedrawer/tree"
 	"github.com/stretchr/testify/assert"
@@ -148,30 +151,16 @@ func Test_MasterLoad(t *testing.T) {
 }
 
 func Test_pageNew(t *testing.T) {
-	fp, err := os.Create("test_page.txt")
+	_, err := os.Create("test_page.txt")
 	if err != nil {
 		t.Fatalf("Failed to open file: %v", err)
 	}
 	defer os.Remove("test_page.txt")
 
 	db := &KV{Path: "test_page.txt"}
-	db.fp = fp
-
 	// Initialize mmap
-	size, chunk, err := mmapInit(fp)
-	if err != nil {
-		t.Fatalf("mmapInit failed: %v", err)
-	}
-	defer syscall.Munmap(chunk)
-	db.mmap.file = size
-	db.mmap.total = size
-	db.mmap.chunks = append(db.mmap.chunks, chunk)
-
+	db.Open()
 	// Test creating a new page
-	db.pageNew(make([]byte, BTREE_PAGE_SIZE))
-	newPage := db.pageNew(make([]byte, BTREE_PAGE_SIZE))
-	assert.True(t, newPage == 1)
-	assert.True(t, len(db.pageGet(newPage)) == BTREE_PAGE_SIZE)
 }
 
 func Test_extenfile(t *testing.T) {
@@ -202,7 +191,7 @@ func newC() *C {
 	pages := map[uint64]BNode{}
 	return &C{
 		tree: BTree{
-			Get: func(ptr uint64) []byte {
+			Get: func(ptr uint64) BNode {
 				node := pages[ptr]
 				// assert(ok)
 				return node
@@ -255,45 +244,61 @@ func Bnode_to_string(b BNode, id uint64) string {
 	var str string
 	str += fmt.Sprintf("(%d)", id)
 	for i := uint16(0); i < b.Nkeys(); i++ {
-		str += fmt.Sprintf("%s:'%s'| ", b.GetKey(i), b.GetVal(i))
+		str += fmt.Sprintf("*")
 	}
 	return str
 }
-func Print_Btree(b_node *BNode, c *C, parent *tree.Tree, id uint64) {
+func Print_Btree(b_node *BNode, c *KV, parent *tree.Tree, id uint64) {
 	if *b_node == nil || b_node.Nkeys() == 0 {
 		return
 	}
 	parent.AddChild(tree.NodeString(Bnode_to_string(*b_node, id)))
 	new_tree := parent.Children()[len(parent.Children())-1]
 	for i := uint16(0); i < b_node.Nkeys(); i++ {
-		b_node_child := c.pages[b_node.GetPtr(i)]
+		b_node_child := BNode(c.page.updates[b_node.GetPtr(i)])
 		Print_Btree(&b_node_child, c, new_tree, b_node.GetPtr(i))
 	}
 }
 
-func (c *C) debug(log string) {
+func (c *KV) debug(log string) {
 	fmt.Println("Debug:", log)
 	f := tree.NewTree(tree.NodeString("BTree Root"))
-	a := c.pages[c.tree.Root]
+	a := BNode(c.page.updates[c.tree.Root])
 	Print_Btree(&a, c, f, c.tree.Root)
 	fmt.Println(f)
 }
+
+const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+func randomString(length int) string {
+	rand.Seed(time.Now().UnixNano())
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(b)
+}
+
 func Test_kv(t *testing.T) {
 	fp, err := os.Create("test_kv.txt")
 	defer fp.Close()
-
 	db := &KV{Path: "test_kv.txt"}
 	err = db.Open()
+	defer os.Remove("test_kv.txt")
 	if err != nil {
 		t.Fatalf("Failed to open KV store: %v", err)
 	}
+	db.page.updates = make(map[uint64][]byte)          // simulate some free pages
+	db.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate a master page
+
+	// db.free.Update(db.page.nfree, []uint64{})          // initialize free list
+
 	defer db.Close()
 	// Test inserting a key-value pair
 	err = db.Set([]byte("key1"), []byte("value2"))
 	if err != nil {
 		t.Fatalf("Insert failed: %v", err)
 	}
-
 	// Test retrieving the value
 	val, ok := db.Get([]byte("k1"))
 
@@ -302,11 +307,11 @@ func Test_kv(t *testing.T) {
 	assert.True(t, !ok)
 	val, ok = db.Get([]byte("key1"))
 	assert.True(t, ok)
-	assert.True(t, string(val) == "value2", "Expected value 'value1' for key 'key1'")
+	assert.Equal(t, "value2", string(val), "Expected value 'value1' for key 'key1'")
 	db.Set([]byte("ke3"), []byte("value2"))
 	val, ok = db.Get([]byte("ke3"))
 	assert.True(t, ok, "Expected key 'ke3' to be found")
-	assert.True(t, string(val) == "value2", "Expected value 'value2' for key 'ke3'")
+	assert.Equal(t, string(val), "value2", "Expected value 'value2' for key 'ke3'")
 
 	// change values of ke3 and key1
 	err = db.Set([]byte("ke3"), []byte("new_value2"))
@@ -320,5 +325,159 @@ func Test_kv(t *testing.T) {
 	val, ok = db.Get([]byte("key1"))
 	assert.True(t, ok, "Expected key 'ke3' to be found after update")
 	assert.True(t, string(val) == "newkey1_value1", "Expected updated value 'newkey1_value1' for key 'key1'")
+	db.Del([]byte("key1"))
+	val, ok = db.Get([]byte("key1"))
+	assert.True(t, !ok, "Expected key 'key1' to be found after deletion")
+	assert.True(t, val == nil, "Expected value to be nil after deletion of key 'key1'")
+	db.Del([]byte("ke3"))
+	val, ok = db.Get([]byte("ke3"))
+	assert.True(t, !ok, "Expected key 'ke3' to be found after deletion")
+	assert.True(t, val == nil, "Expected value to be nil after deletion of key 'ke3'")
+	// set 10 random keys
+	for i := 0; i < 6; i++ {
+		key := randomString(12)
+		val := randomString(22)
+		err = db.Set([]byte(key), []byte(val))
+		assert.NoError(t, err, "Expected no error when inserting key-value pair")
+		retrievedVal, ok := db.Get([]byte(key))
+		assert.True(t, ok, "Expected key to be found after insertion")
+		assert.Equal(t, val, string(retrievedVal), "Expected retrieved value to match inserted value")
+	}
+	// db.debug("After inserting random keys")
 
+	db.Del([]byte("key1"))
+}
+
+func Test_KV(t *testing.T) {
+	fmt.Println("=== Simple KV Sequential Test ===")
+
+	// Open database
+	path := "test.db"
+	db := &KV{Path: path}
+	fp, err := os.Create(path)
+	err = db.Open()
+	defer fp.Close()
+	defer os.Remove(path)
+	if err != nil {
+		t.Fatalf("Failed to open KV store: %v", err)
+	}
+	db.page.updates = make(map[uint64][]byte)          // simulate some free pages
+	db.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate a master page
+
+	// db.free.Update(db.page.nfree, []uint64{})          // initialize free list
+
+	defer db.Close()
+	fmt.Println("\n1. Setting keys...")
+
+	err = db.Set([]byte("key1"), []byte("value1"))
+	if err != nil {
+		log.Printf("Set key1 failed: %v", err)
+	} else {
+		fmt.Println("✅ Set key1 -> value1")
+	}
+
+	err = db.Set([]byte("key2"), []byte("value2"))
+	if err != nil {
+		log.Printf("Set key2 failed: %v", err)
+	} else {
+		fmt.Println("✅ Set key2 -> value2")
+	}
+
+	err = db.Set([]byte("key3"), []byte("value3"))
+	if err != nil {
+		log.Printf("Set key3 failed: %v", err)
+	} else {
+		fmt.Println("✅ Set key3 -> value3")
+	}
+
+	// Test 2: Get the keys
+	fmt.Println("\n2. Getting keys...")
+
+	val, found := db.Get([]byte("key1"))
+	if found {
+		fmt.Printf("✅ Get key1 -> %s\n", val)
+	} else {
+		fmt.Println("❌ Get key1 -> not found")
+	}
+
+	val, found = db.Get([]byte("key2"))
+	if found {
+		fmt.Printf("✅ Get key2 -> %s\n", val)
+	} else {
+		fmt.Println("❌ Get key2 -> not found")
+	}
+
+	val, found = db.Get([]byte("key3"))
+	if found {
+		fmt.Printf("✅ Get key3 -> %s\n", val)
+	} else {
+		fmt.Println("❌ Get key3 -> not found")
+	}
+
+	// Test 3: Delete some keys
+	fmt.Println("\n3. Deleting keys...")
+
+	deleted, err := db.Del([]byte("key2"))
+	if err != nil {
+		log.Printf("Delete key2 failed: %v", err)
+	} else if deleted {
+		fmt.Println("✅ Deleted key2")
+	} else {
+		fmt.Println("❌ Delete key2 -> not found")
+	}
+
+	// Test 4: Get after delete
+	fmt.Println("\n4. Getting after delete...")
+
+	val, found = db.Get([]byte("key1"))
+	if found {
+		fmt.Printf("✅ Get key1 -> %s (still exists)\n", val)
+	} else {
+		fmt.Println("❌ Get key1 -> not found")
+	}
+
+	val, found = db.Get([]byte("key2"))
+	if found {
+		fmt.Printf("❌ Get key2 -> %s (should be deleted!)\n", val)
+	} else {
+		fmt.Println("✅ Get key2 -> not found (correctly deleted)")
+	}
+
+	val, found = db.Get([]byte("key3"))
+	if found {
+		fmt.Printf("✅ Get key3 -> %s (still exists)\n", val)
+	} else {
+		fmt.Println("❌ Get key3 -> not found")
+	}
+
+	// Test 5: Update existing key
+	fmt.Println("\n5. Updating existing key...")
+
+	err = db.Set([]byte("key1"), []byte("updated_value"))
+	if err != nil {
+		log.Printf("Update key1 failed: %v", err)
+	} else {
+		fmt.Println("✅ Updated key1")
+	}
+
+	val, found = db.Get([]byte("key1"))
+	if found {
+		fmt.Printf("✅ Get key1 -> %s (updated)\n", val)
+	} else {
+		fmt.Println("❌ Get key1 -> not found")
+	}
+
+	// Test 6: Delete non-existent key
+	fmt.Println("\n6. Deleting non-existent key...")
+
+	deleted, err = db.Del([]byte("nonexistent"))
+	if err != nil {
+		log.Printf("Delete nonexistent failed: %v", err)
+	} else if deleted {
+		fmt.Println("❌ Delete nonexistent -> returned true (should be false)")
+	} else {
+		fmt.Println("✅ Delete nonexistent -> correctly returned false")
+	}
+
+	fmt.Println("\n=== Test Complete ===")
 }

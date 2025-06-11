@@ -20,7 +20,7 @@ func newC() *C {
 	pages := map[uint64]BNode{}
 	return &C{
 		tree: BTree{
-			Get: func(ptr uint64) []byte {
+			Get: func(ptr uint64) BNode {
 				node := pages[ptr]
 				// assert(ok)
 				return node
