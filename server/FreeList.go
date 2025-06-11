@@ -33,7 +33,7 @@ func flnSize(node BNode) int {
 	return int(binary.LittleEndian.Uint16(node[2:4]))
 }
 func flnNext(node BNode) uint64 {
-	return binary.LittleEndian.Uint64(node[4:12])
+	return binary.LittleEndian.Uint64(node[12:20])
 }
 func flnPtr(node BNode, idx int) uint64 {
 	return binary.LittleEndian.Uint64(node[FREE_LIST_HEADER+8*idx:])
@@ -123,14 +123,9 @@ func (fl *FreeList) Update(popn int, freed []uint64) {
 		}
 		// discard the node and move to the next node
 		total -= flnSize(node)
-		if flnNext(node) != 0 {
-			// reuse the next pointer
-			fl.head = flnNext(node)
-		} else {
-			break
-		}
+		fl.head = flnNext(node)
 	}
-	// checkAssertion(len(reuse)*FREE_LIST_CAP >= len(freed) || fl.head == 0)
+	checkAssertion(len(reuse)*FREE_LIST_CAP >= len(freed) || fl.head == 0)
 	// phase 3: prepend new nodes
 	flPush(fl, freed, reuse)
 	// done

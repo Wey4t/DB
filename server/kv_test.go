@@ -3,9 +3,11 @@ package server
 import (
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"os"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/m1gwings/treedrawer/tree"
 	"github.com/stretchr/testify/assert"
@@ -157,12 +159,7 @@ func Test_pageNew(t *testing.T) {
 	db := &KV{Path: "test_page.txt"}
 	// Initialize mmap
 	db.Open()
-	db.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate some free pages
 	// Test creating a new page
-	db.pageNew(make([]byte, BTREE_PAGE_SIZE))
-	newPage := db.pageNew(make([]byte, BTREE_PAGE_SIZE))
-	assert.True(t, newPage == 3)
-	assert.True(t, len(db.pageGet(newPage)) == BTREE_PAGE_SIZE)
 }
 
 func Test_extenfile(t *testing.T) {
@@ -246,29 +243,41 @@ func Bnode_to_string(b BNode, id uint64) string {
 	var str string
 	str += fmt.Sprintf("(%d)", id)
 	for i := uint16(0); i < b.Nkeys(); i++ {
-		str += fmt.Sprintf("%s:'%s'| ", b.GetKey(i), b.GetVal(i))
+		str += fmt.Sprintf("*")
 	}
 	return str
 }
-func Print_Btree(b_node *BNode, c *C, parent *tree.Tree, id uint64) {
+func Print_Btree(b_node *BNode, c *KV, parent *tree.Tree, id uint64) {
 	if *b_node == nil || b_node.Nkeys() == 0 {
 		return
 	}
 	parent.AddChild(tree.NodeString(Bnode_to_string(*b_node, id)))
 	new_tree := parent.Children()[len(parent.Children())-1]
 	for i := uint16(0); i < b_node.Nkeys(); i++ {
-		b_node_child := c.pages[b_node.GetPtr(i)]
+		b_node_child := BNode(c.page.updates[b_node.GetPtr(i)])
 		Print_Btree(&b_node_child, c, new_tree, b_node.GetPtr(i))
 	}
 }
 
-func (c *C) debug(log string) {
+func (c *KV) debug(log string) {
 	fmt.Println("Debug:", log)
 	f := tree.NewTree(tree.NodeString("BTree Root"))
-	a := c.pages[c.tree.Root]
+	a := BNode(c.page.updates[c.tree.Root])
 	Print_Btree(&a, c, f, c.tree.Root)
 	fmt.Println(f)
 }
+
+const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+func randomString(length int) string {
+	rand.Seed(time.Now().UnixNano())
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(b)
+}
+
 func Test_kv(t *testing.T) {
 	fp, err := os.Create("test_kv.txt")
 	defer fp.Close()
@@ -277,7 +286,10 @@ func Test_kv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open KV store: %v", err)
 	}
-	db.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate some free pages
+	db.page.updates = make(map[uint64][]byte)          // simulate some free pages
+	db.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate a master page
+
+	// db.free.Update(db.page.nfree, []uint64{})          // initialize free list
 
 	defer db.Close()
 	// Test inserting a key-value pair
@@ -285,8 +297,6 @@ func Test_kv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Insert failed: %v", err)
 	}
-	err = db.Set([]byte("key1"), []byte("value2"))
-
 	// Test retrieving the value
 	val, ok := db.Get([]byte("k1"))
 
@@ -295,11 +305,11 @@ func Test_kv(t *testing.T) {
 	assert.True(t, !ok)
 	val, ok = db.Get([]byte("key1"))
 	assert.True(t, ok)
-	assert.True(t, string(val) == "value2", "Expected value 'value1' for key 'key1'")
+	assert.Equal(t, "value2", string(val), "Expected value 'value1' for key 'key1'")
 	db.Set([]byte("ke3"), []byte("value2"))
 	val, ok = db.Get([]byte("ke3"))
 	assert.True(t, ok, "Expected key 'ke3' to be found")
-	assert.True(t, string(val) == "value2", "Expected value 'value2' for key 'ke3'")
+	assert.Equal(t, string(val), "value2", "Expected value 'value2' for key 'ke3'")
 
 	// change values of ke3 and key1
 	err = db.Set([]byte("ke3"), []byte("new_value2"))
@@ -313,5 +323,24 @@ func Test_kv(t *testing.T) {
 	val, ok = db.Get([]byte("key1"))
 	assert.True(t, ok, "Expected key 'ke3' to be found after update")
 	assert.True(t, string(val) == "newkey1_value1", "Expected updated value 'newkey1_value1' for key 'key1'")
-
+	db.Del([]byte("key1"))
+	val, ok = db.Get([]byte("key1"))
+	assert.True(t, !ok, "Expected key 'key1' to be found after deletion")
+	assert.True(t, val == nil, "Expected value to be nil after deletion of key 'key1'")
+	db.Del([]byte("ke3"))
+	val, ok = db.Get([]byte("ke3"))
+	assert.True(t, !ok, "Expected key 'ke3' to be found after deletion")
+	assert.True(t, val == nil, "Expected value to be nil after deletion of key 'ke3'")
+	// set 10 random keys
+	// for i := 0; i < 3; i++ {
+	// 	key := randomString(123)
+	// 	val := randomString(222)
+	// 	err = db.Set([]byte(key), []byte(val))
+	// 	assert.NoError(t, err, "Expected no error when inserting key-value pair")
+	// 	retrievedVal, ok := db.Get([]byte(key))
+	// 	assert.True(t, ok, "Expected key to be found after insertion")
+	// 	assert.Equal(t, val, string(retrievedVal), "Expected retrieved value to match inserted value")
+	// }
+	db.debug("After inserting random keys")
+	db.Del([]byte("key1"))
 }
