@@ -302,7 +302,7 @@ func Test_kv(t *testing.T) {
 	assert.True(t, !ok, "Expected key 'ke3' to be found after deletion")
 	assert.True(t, val == nil, "Expected value to be nil after deletion of key 'ke3'")
 	// set 10 random keys
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 516; i++ {
 		key := randomString(12)
 		val := randomString(22)
 		err = db.Set([]byte(key), []byte(val))
