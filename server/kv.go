@@ -324,7 +324,8 @@ func writePages(db *KV) error {
 	}
 	db.free.Update(db.page.nfree, freed)
 	// extend the file & mmap if needed
-	npages := int(db.page.flushed) + len(db.page.temp) + db.page.nappend + 12
+	npages := len(db.page.updates)
+	// fmt.Println("npages:", npages)
 	if err := extendFile(db, npages); err != nil {
 		return err
 	}
@@ -404,7 +405,7 @@ func Bnode_to_string(b BNode, id uint64) string {
 	var str string
 	str += fmt.Sprintf("(%d)", id)
 	for i := uint16(0); i < b.Nkeys(); i++ {
-		str += fmt.Sprintf("%s,%s ||||", b.GetKey(i), b.GetVal(i))
+		str += fmt.Sprintf("%d,%d ||||", len(b.GetKey(i)), len(b.GetVal(i)))
 	}
 	return str
 }
