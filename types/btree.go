@@ -276,3 +276,7 @@ func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
 	}
 	return new
 }
+
+func (tree *BTree) InsertEx(req *InsertReq) {
+	return
+}

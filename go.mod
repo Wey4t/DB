@@ -1,4 +1,4 @@
-module db
+module database
 
 go 1.23.5
 

@@ -8,6 +8,8 @@ import (
 	"os"
 	"syscall"
 	. "types"
+
+	"github.com/m1gwings/treedrawer/tree"
 )
 
 func checkAssertion(cond bool) {
@@ -78,6 +80,34 @@ func extendMmap(db *KV, npages int) error {
 	db.mmap.total += db.mmap.total
 	db.mmap.chunks = append(db.mmap.chunks, chunk)
 	return nil
+}
+func NewKv(path string) *KV {
+	fp, _ := os.Create(path)
+	defer fp.Close()
+	kv := &KV{Path: path}
+
+	kv.page.updates = make(map[uint64][]byte)          // simulate some free pages
+	kv.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate a master page
+
+	// db.free.Update(db.page.nfree, []uint64{})          // initialize free list
+
+	return kv
+}
+func (db *KV) Update(key []byte, val []byte, mode int) (bool, error) {
+	_, ok := db.Get(key)
+	if ok && mode == MODE_INSERT_ONLY {
+		return false, errors.New("key exist")
+	} else if !ok && mode == MODE_UPDATE_ONLY {
+		return false, errors.New("key not exist")
+	}
+	err := db.Set(key, val)
+	if err != nil {
+		return false, err
+	} else {
+		return true, nil
+	}
+	// return false, errors.New("operation error")
+
 }
 
 func (db *KV) pageGet(ptr uint64) BNode {
@@ -294,7 +324,7 @@ func writePages(db *KV) error {
 	}
 	db.free.Update(db.page.nfree, freed)
 	// extend the file & mmap if needed
-	npages := int(db.page.flushed) + len(db.page.temp) + db.page.nappend
+	npages := int(db.page.flushed) + len(db.page.temp) + db.page.nappend + 12
 	if err := extendFile(db, npages); err != nil {
 		return err
 	}
@@ -366,4 +396,34 @@ func updateRoot(db *KV) error {
 		return fmt.Errorf("write meta page: %w", err)
 	}
 	return nil
+}
+func Bnode_to_string(b BNode, id uint64) string {
+	if len(b) == 0 {
+		return "(empty)"
+	}
+	var str string
+	str += fmt.Sprintf("(%d)", id)
+	for i := uint16(0); i < b.Nkeys(); i++ {
+		str += fmt.Sprintf("%s,%s ||||", b.GetKey(i), b.GetVal(i))
+	}
+	return str
+}
+func Print_Btree(b_node *BNode, c *KV, parent *tree.Tree, id uint64) {
+	if *b_node == nil || b_node.Nkeys() == 0 {
+		return
+	}
+	parent.AddChild(tree.NodeString(Bnode_to_string(*b_node, id)))
+	new_tree := parent.Children()[len(parent.Children())-1]
+	for i := uint16(0); i < b_node.Nkeys(); i++ {
+		b_node_child := BNode(c.page.updates[b_node.GetPtr(i)])
+		Print_Btree(&b_node_child, c, new_tree, b_node.GetPtr(i))
+	}
+}
+
+func (c *KV) Debug(log string) {
+	fmt.Println("Debug:", log)
+	f := tree.NewTree(tree.NodeString("BTree Root"))
+	a := BNode(c.page.updates[c.tree.Root])
+	Print_Btree(&a, c, f, c.tree.Root)
+	fmt.Println(f)
 }

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/m1gwings/treedrawer/tree"
 	"github.com/stretchr/testify/assert"
 
 	. "types"
@@ -235,37 +234,6 @@ func (c *C) delete(key string) (string, bool) {
 	TreeDelete(&c.tree, c.pages[c.tree.Root], []byte(key)) // delete from the tree
 	delete(c.ref, key)                                     // remove from reference data
 	return val, true
-}
-
-func Bnode_to_string(b BNode, id uint64) string {
-	if len(b) == 0 {
-		return "(empty)"
-	}
-	var str string
-	str += fmt.Sprintf("(%d)", id)
-	for i := uint16(0); i < b.Nkeys(); i++ {
-		str += fmt.Sprintf("*")
-	}
-	return str
-}
-func Print_Btree(b_node *BNode, c *KV, parent *tree.Tree, id uint64) {
-	if *b_node == nil || b_node.Nkeys() == 0 {
-		return
-	}
-	parent.AddChild(tree.NodeString(Bnode_to_string(*b_node, id)))
-	new_tree := parent.Children()[len(parent.Children())-1]
-	for i := uint16(0); i < b_node.Nkeys(); i++ {
-		b_node_child := BNode(c.page.updates[b_node.GetPtr(i)])
-		Print_Btree(&b_node_child, c, new_tree, b_node.GetPtr(i))
-	}
-}
-
-func (c *KV) debug(log string) {
-	fmt.Println("Debug:", log)
-	f := tree.NewTree(tree.NodeString("BTree Root"))
-	a := BNode(c.page.updates[c.tree.Root])
-	Print_Btree(&a, c, f, c.tree.Root)
-	fmt.Println(f)
 }
 
 const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
