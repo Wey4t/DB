@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -49,7 +50,7 @@ func (rec *Record) Get(key string) *Value {
 type DB struct {
 	Path string
 	// internals
-	kv     KV
+	kv     *KV
 	tables map[string]*TableDef // cached table definition
 }
 
@@ -84,6 +85,7 @@ var TDEF_TABLE = &TableDef{
 
 // get a single row by the primary key
 func dbGet(db *DB, tdef *TableDef, rec *Record) (bool, error) {
+
 	values, err := checkRecord(tdef, *rec, tdef.PKeys)
 	if err != nil {
 		return false, err
@@ -103,6 +105,24 @@ func dbGet(db *DB, tdef *TableDef, rec *Record) (bool, error) {
 	rec.Vals = append(rec.Vals, values[tdef.PKeys:]...)
 	return true, nil
 }
+
+// func dbGet(db *DB, tdef *TableDef, rec *Record) (bool, error) {
+// 	sc := Scanner{
+// 		Cmp1: CMP_GE,
+// 		Cmp2: CMP_LE,
+// 		Key1: *rec,
+// 		Key2: *rec,
+// 	}
+// 	if err := dbScan(db, tdef, &sc); err != nil {
+// 		return false, err
+// 	}
+// 	if sc.Valid() {
+// 		sc.Deref(rec)
+// 		return true, nil
+// 	} else {
+// 		return false, nil
+// 	}
+// }
 
 // reorder a record and check for missing columns.
 // n == tdef.PKeys: record is exactly a primary key
@@ -138,28 +158,121 @@ func checkRecord(tdef *TableDef, rec Record, n int) ([]Value, error) {
 	return nil, errors.New("record must contain primary key columns only")
 }
 
+//	func encodeValues(out []byte, vals []Value) []byte {
+//		for _, val := range vals {
+//			encodeVal, _ := json.Marshal(val)
+//			uint32Len := uint32(len(encodeVal))
+//			var buf [4]byte
+//			binary.BigEndian.PutUint32(buf[:], uint32Len)
+//			out = append(out, buf[:]...) // write the length of the value
+//			out = append(out, encodeVal...)
+//		}
+//		return out // omitted: encode each Value to the output slice
+//	}
 func encodeValues(out []byte, vals []Value) []byte {
-	for _, val := range vals {
-		encodeVal, _ := json.Marshal(val)
-		uint32Len := uint32(len(encodeVal))
-		var buf [4]byte
-		binary.BigEndian.PutUint32(buf[:], uint32Len)
-		out = append(out, buf[:]...) // write the length of the value
-		out = append(out, encodeVal...)
+	for _, v := range vals {
+		switch v.Type {
+		case TYPE_INT64:
+			var buf [8]byte
+			u := uint64(v.I64) + (1 << 63)
+			binary.BigEndian.PutUint64(buf[:], u)
+			out = append(out, buf[:]...)
+		case TYPE_BYTES:
+			out = append(out, escapeString(v.Str)...)
+			out = append(out, 0) // null-terminated
+		default:
+			panic("what?")
+		}
 	}
-	return out // omitted: encode each Value to the output slice
+	return out
 }
-func decodeValues(in []byte, out []Value) {
-	length := binary.BigEndian.Uint32(in[:4])
-	Assert(len(out) > 0)
+
+// Strings are encoded as nul terminated strings,
+// escape the nul byte so that strings contain no null byte.
+func escapeString(in []byte) []byte {
+	zeros := bytes.Count(in, []byte{0})
+	ones := bytes.Count(in, []byte{1})
+	if zeros+ones == 0 {
+		return in
+	}
+	out := make([]byte, len(in)+zeros+ones)
+	pos := 0
+	for _, ch := range in {
+		if ch <= 1 {
+			out[pos+0] = 0x01
+			out[pos+1] = ch + 1
+			pos += 2
+		} else {
+			out[pos] = ch
+			pos += 1
+		}
+	}
+	return out
+}
+
+// expect in is null end
+func unEscapeString(in []byte) []byte {
+	if len(in) == 0 {
+		return nil
+	}
+
+	out := make([]byte, len(in))
 	count := 0
-	for length > 0 && count < len(out) {
-		val := Value{}
-		json.Unmarshal(in[4:4+length], &val)
-		out[count] = val
+	for i := 0; i < len(in); {
+		ch := in[i]
+		if ch == 1 {
+			Assert(i+1 < len(in))
+			if in[i+1] == 1 {
+				out[count] = 0
+			} else {
+				out[count] = 1
+			}
+			i += 2
+		} else {
+			out[count] = ch
+			i += 1
+		}
 		count += 1
-		in = in[4+length:]
-		length = binary.BigEndian.Uint32(in[:4])
+	}
+	return out[:count]
+
+}
+
+func decodeValues(in []byte, out []Value) {
+	pos := 0
+	for i, val := range out {
+		switch val.Type {
+		case TYPE_INT64:
+			// Need at least 8 bytes for int64
+			Assert(pos+8 <= len(in))
+
+			// Read 8 bytes and decode int64
+			u := binary.BigEndian.Uint64(in[pos : pos+8])
+			i64 := int64(u - (1 << 63)) // Reverse the bias encoding
+			out[i].I64 = i64
+			pos += 8
+
+		case TYPE_BYTES:
+			// Find the null terminator
+			nullPos := -1
+			for i := pos; i < len(in); i++ {
+				if in[i] == 0 {
+					nullPos = i
+					break
+				}
+			}
+			Assert(nullPos != -1)
+			// Extract the escaped string (without null terminator)
+			escapedStr := in[pos:nullPos]
+
+			// Unescape the string
+			unescapedStr := unEscapeString(escapedStr)
+
+			out[i].Str = unescapedStr
+			pos = nullPos + 1 // Skip past the null terminator
+		default:
+			panic("bad type")
+		}
 	}
 }
 

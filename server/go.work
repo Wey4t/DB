@@ -4,4 +4,5 @@ use (
 	.
 	../types
 	../db
+	../utils
 )

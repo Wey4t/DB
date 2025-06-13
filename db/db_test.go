@@ -1,10 +1,14 @@
 package db
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"os"
 	. "server"
 	"testing"
+	. "types"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -60,6 +64,9 @@ func TestEncodeValue(t *testing.T) {
 	vals := []Value{val1, val2, val2, val2, val2, val2, val3}
 	encoded := encodeValues(nil, vals)
 	decoded := make([]Value, len(vals))
+	for i := 0; i < len(vals); i++ {
+		decoded[i].Type = vals[i].Type
+	}
 	decodeValues(encoded, decoded[:])
 	assert.True(t, ValuesEqual(vals, decoded), "Encoded and decoded values should be equal")
 }
@@ -91,7 +98,7 @@ func TestNewTable(t *testing.T) {
 	defer os.Remove("test_page.txt")
 	defer kv.Close()
 	db := &DB{
-		kv:     *kv,
+		kv:     kv,
 		tables: map[string]*TableDef{},
 		Path:   "test_page.txt",
 	}
@@ -422,6 +429,164 @@ func TestNewTable(t *testing.T) {
 	assert.True(t, ValuesEqual(rec35.Vals, search_rec.Vals))
 }
 
-func TestDel(t *testing.T) {
+func TestScanner(t *testing.T) {
+	os.Remove("test_page.txt")
+	kv := NewKv("test_page.txt")
+	kv.Open()
+	defer os.Remove("test_page.txt")
+	defer kv.Close()
+	db := &DB{
+		kv:     kv,
+		tables: map[string]*TableDef{},
+		Path:   "test_page.txt",
+	}
+	test_table := TableDef{
+		Name:   "abc",
+		Types:  []uint32{TYPE_BYTES, TYPE_INT64, TYPE_INT64, TYPE_INT64, TYPE_BYTES},
+		Cols:   []string{"name", "age", "height", "weight", "address"},
+		PKeys:  1,
+		Prefix: 0,
+	}
+	// db.kv.Debug("")
+	db.TableNew(TDEF_META)
 
+	db.TableNew(&test_table)
+	// db.kv.Debug("")
+
+	test_table.Name = "123"
+	db.TableNew(&test_table)
+	test_table.Name = "abc"
+	// Sample Record 1: Alice
+	rec1 := (&Record{}).
+		AddStr("name", []byte("Bob")).
+		AddInt64("age", 30).
+		AddInt64("height", 165). // cm
+		AddInt64("weight", 55).  // kg
+		AddStr("address", []byte("123 Main St, New York"))
+	// Sample Record 2: Bob
+	rec2 := (&Record{}).
+		AddStr("name", []byte("Zob")).
+		AddInt64("age", 25).
+		AddInt64("height", 180).
+		AddInt64("weight", 75).
+		AddStr("address", []byte("456 Oak Ave, California"))
+
+	// Sample Record 3: Charlie
+	rec3 := (&Record{}).
+		AddStr("name", []byte("Charlie")).
+		AddInt64("age", 35).
+		AddInt64("height", 175).
+		AddInt64("weight", 70).
+		AddStr("address", []byte("789 Pine Rd, Texas"))
+
+	// Sample Record 4: Diana
+	rec4 := (&Record{}).
+		AddStr("name", []byte("Diana")).
+		AddInt64("age", 28).
+		AddInt64("height", 160).
+		AddInt64("weight", 50).
+		AddStr("address", []byte("321 Elm St, Florida"))
+
+	// Sample Record 5: Eve
+	rec5 := (&Record{}).
+		AddStr("name", []byte("Eve")).
+		AddInt64("age", 42).
+		AddInt64("height", 170).
+		AddInt64("weight", 65).
+		AddStr("address", []byte("654 Maple Dr, Oregon"))
+
+	// Sample Record 6: Frank
+	rec6 := (&Record{}).
+		AddStr("name", []byte("Frank")).
+		AddInt64("age", 19).
+		AddInt64("height", 185).
+		AddInt64("weight", 80).
+		AddStr("address", []byte("987 Cedar Ln, Washington"))
+
+	// Test with various ages and sizes
+	rec7 := (&Record{}).
+		AddStr("name", []byte("Michael Jordan")).
+		AddInt64("age", 60).
+		AddInt64("height", 198).
+		AddInt64("weight", 98).
+		AddStr("address", []byte("Chicago Bulls Arena, Illinois"))
+
+	rec8 := (&Record{}).
+		AddStr("name", []byte("Serena Williams")).
+		AddInt64("age", 42).
+		AddInt64("height", 175).
+		AddInt64("weight", 70).
+		AddStr("address", []byte("Tennis Court Dr, Florida"))
+
+	rec9 := (&Record{}).
+		AddStr("name", []byte("Usain Bolt")).
+		AddInt64("age", 37).
+		AddInt64("height", 195).
+		AddInt64("weight", 94).
+		AddStr("address", []byte("Sprint Lane, Jamaica"))
+
+	// Tech Workers
+	rec10 := (&Record{}).
+		AddStr("name", []byte("Sarah Chen")).
+		AddInt64("age", 29).
+		AddInt64("height", 162).
+		AddInt64("weight", 52).
+		AddStr("address", []byte("Silicon Valley Blvd, California"))
+	records := []*Record{
+		rec1, rec2, rec3, rec4, rec5, rec6, rec7, rec8, rec9, rec10,
+	}
+	for _, rec := range records {
+		db.Insert("abc", *rec)
+	}
+	left := "Frank"
+	right := "Zob"
+	search_rec1 := (&Record{}).AddStr("name", []byte(left))
+	search_rec2 := (&Record{}).AddStr("name", []byte(right))
+
+	sc := Scanner{
+		Cmp1: CMP_GE,
+		Cmp2: CMP_LE,
+		Key1: *search_rec1,
+		Key2: *search_rec2,
+		tdef: &test_table,
+	}
+	table := (&Record{}).AddStr("name", []byte(test_table.Name))
+	_, err := dbGet(db, TDEF_TABLE, table)
+	def := table.Get("def").Str
+	tdef := TableDef{}
+	json.Unmarshal(def, &tdef)
+	assert.True(t, err == nil)
+	test_table.Prefix = tdef.Prefix
+	dbScan(db, &test_table, &sc)
+	for sc.Valid() {
+		k, _ := sc.iter.Deref()
+		out := make([]Value, 1)
+		out[0].Type = TYPE_BYTES
+		decodeValues(k[4:], out)
+		ans_rec := (&Record{}).AddStr("name", out[0].Str)
+		sc.Deref(ans_rec)
+		// ans_rec.print()
+		assert.True(t, bytes.Compare([]byte(left), ans_rec.Get("name").Str) <= 0)
+		assert.True(t, bytes.Compare([]byte(right), ans_rec.Get("name").Str) >= 0)
+		sc.Next()
+	}
+}
+
+func (rec *Record) print() {
+	for i, val := range rec.Vals {
+		if val.Type == TYPE_INT64 {
+			fmt.Printf("  %s: %d\n", rec.Cols[i], val.I64)
+		} else if val.Type == TYPE_BYTES {
+			fmt.Printf("  %s: %s\n", rec.Cols[i], val.Str)
+		} else {
+			panic("wrong type")
+		}
+	}
+}
+
+func TestEscape(t *testing.T) {
+	test_str := []byte("123412341234")
+	in := escapeString(test_str)
+	out := unEscapeString(in)
+	assert.Equal(t, test_str, out)
 }

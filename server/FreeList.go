@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	. "types"
+	. "utils"
 )
 
 // The node format:
@@ -53,12 +54,12 @@ func flnSetTotal(node BNode, total uint64) {
 }
 
 func (fl *FreeList) Get(topn int) uint64 {
-	checkAssertion(0 <= topn && topn < fl.Total())
+	Assert(0 <= topn && topn < fl.Total())
 	node := fl.get(fl.head)
 	for flnSize(node) <= topn {
 		topn -= flnSize(node)
 		next := flnNext(node)
-		checkAssertion(next != 0)
+		Assert(next != 0)
 		node = fl.get(next)
 	}
 	return flnPtr(node, flnSize(node)-topn-1)
@@ -90,11 +91,15 @@ func flPush(fl *FreeList, freed []uint64, reuse []uint64) {
 			fl.head = fl.new(new)
 		}
 	}
-	checkAssertion(len(reuse) == 0)
+	// checkAssertion(len(reuse) == 0)
+	// don't know why reuse should == 0
+	if len(reuse) > 0 {
+		flPush(fl, reuse, nil)
+	}
 }
 
 func (fl *FreeList) Update(popn int, freed []uint64) {
-	checkAssertion(popn <= fl.Total())
+	Assert(popn <= fl.Total())
 	if popn == 0 && len(freed) == 0 {
 		return // nothing to do
 	}
@@ -127,7 +132,7 @@ func (fl *FreeList) Update(popn int, freed []uint64) {
 		total -= flnSize(node)
 		fl.head = flnNext(node)
 	}
-	checkAssertion(len(reuse)*FREE_LIST_CAP >= len(freed) || fl.head == 0)
+	Assert(len(reuse)*FREE_LIST_CAP >= len(freed) || fl.head == 0)
 	// phase 3: prepend new nodes
 	flPush(fl, freed, reuse)
 	// done

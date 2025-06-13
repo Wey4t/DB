@@ -1,0 +1,20 @@
+# LOG
+
+## 6/12
+
+Record is split as key and values
+And need to encode key and values
+Every table has a prefix, it may help in ordering
+so key is encoded as
+```
+                    4           8                                          8+len
+         +-----------+-----------+-------------------------------------------+
+         |   prefix  |    len    |             object serialization          |
+         +-----------+-----------+-------------------------------------------+
+```
+
+It is problemtic because when compare key with bytes.Compare or memcmp it compare the len, result that the query is compare the length of key than compare the key
+
+### Data Serialization
+
+## Order-preserving encoding

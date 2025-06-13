@@ -6,6 +6,11 @@ import (
 	"math/rand"
 )
 
+func checkAssertion(cond bool) {
+	if !cond {
+		panic("assertion failed")
+	}
+}
 func Assert(cond bool) {
 	if !cond {
 		panic("assertion failed")

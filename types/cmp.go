@@ -14,7 +14,7 @@ func (tree *BTree) Seek(key []byte, cmp int) *BIter {
 	iter := tree.SeekLE(key)
 	if cmp != CMP_LE && iter.Valid() {
 		cur, _ := iter.Deref()
-		if !cmpOK(cur, cmp, key) {
+		if !CmpOK(cur, cmp, key) {
 			// off by one
 			if cmp > 0 {
 				iter.Next()
@@ -27,7 +27,7 @@ func (tree *BTree) Seek(key []byte, cmp int) *BIter {
 }
 
 // key cmp ref
-func cmpOK(key []byte, cmp int, ref []byte) bool {
+func CmpOK(key []byte, cmp int, ref []byte) bool {
 	r := bytes.Compare(key, ref)
 	switch cmp {
 	case CMP_GE:

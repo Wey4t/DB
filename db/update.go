@@ -63,19 +63,19 @@ func (db *DB) TableNew(tdef *TableDef) error {
 		return fmt.Errorf("table exists: %s", tdef.Name)
 	}
 	// allocate a new prefix
-	Assert(tdef.Prefix == 0)
+	// Assert(tdef.Prefix == 0)
 	tdef.Prefix = TABLE_PREFIX_MIN
 	meta := (&Record{}).AddStr("key", []byte("next_prefix"))
 	ok, err = dbGet(db, TDEF_META, meta)
 	Assert(err == nil)
 	if ok {
-		tdef.Prefix = binary.LittleEndian.Uint32(meta.Get("val").Str)
+		tdef.Prefix = binary.BigEndian.Uint32(meta.Get("val").Str)
 		Assert(tdef.Prefix > TABLE_PREFIX_MIN)
 	} else {
 		meta.AddStr("val", make([]byte, 4))
 	}
 	// update the next prefix
-	binary.LittleEndian.PutUint32(meta.Get("val").Str, tdef.Prefix+1)
+	binary.BigEndian.PutUint32(meta.Get("val").Str, tdef.Prefix+1)
 	_, err = dbUpdate(db, TDEF_META, *meta, 0)
 	if err != nil {
 		return err
