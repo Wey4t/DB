@@ -1,21 +1,23 @@
-**durability and atomicity**
-**what is database**
+# Durability and atomicity
+## what is database 
+
 - They can persist data to disk.
 - They are disk-based, can work with larger-than-memory data.
 - They are implemented from scratch, not as wrappers over other databases.
 
-*Database has durability guarantee*
+## Database has durability guarantee
 
-**fsync system call**
+## fsync system call
+
 - DB will only return success to the client after fsync.
 - If it fail before fsync or halfway, the most recent data may be lost, but it should not be half lost, half persisted
 - A database must recover from a crash to a reasonable state, which is harder than using fsync.
 
-**Data struct**
+# Data struct
+
 - Hashtables
 - Sorted Array
 - B-tree
-
 
 ## page struct
 

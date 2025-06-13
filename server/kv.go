@@ -8,15 +8,10 @@ import (
 	"os"
 	"syscall"
 	. "types"
+	. "utils"
 
 	"github.com/m1gwings/treedrawer/tree"
 )
-
-func checkAssertion(cond bool) {
-	if !cond {
-		panic("assertion failed")
-	}
-}
 
 func mmapInit(fp *os.File) (int, []byte, error) {
 	fi, err := fp.Stat()
@@ -27,7 +22,7 @@ func mmapInit(fp *os.File) (int, []byte, error) {
 		return 0, nil, errors.New("File size is not a multiple of page size.")
 	}
 	mmapSize := 64 << 20
-	checkAssertion(mmapSize%BTREE_PAGE_SIZE == 0)
+	Assert(mmapSize%BTREE_PAGE_SIZE == 0)
 	for mmapSize < int(fi.Size()) {
 		mmapSize *= 2
 	}
@@ -82,10 +77,7 @@ func extendMmap(db *KV, npages int) error {
 	return nil
 }
 func NewKv(path string) *KV {
-	fp, _ := os.Create(path)
-	defer fp.Close()
 	kv := &KV{Path: path}
-
 	kv.page.updates = make(map[uint64][]byte)          // simulate some free pages
 	kv.page.updates[0] = make([]byte, BTREE_PAGE_SIZE) // simulate a master page
 
@@ -112,7 +104,7 @@ func (db *KV) Update(key []byte, val []byte, mode int) (bool, error) {
 
 func (db *KV) pageGet(ptr uint64) BNode {
 	if page, ok := db.page.updates[ptr]; ok {
-		checkAssertion(page != nil)
+		Assert(page != nil)
 		return BNode(page) // for new pages
 	}
 	return pageGetMapped(db, ptr) // for written pages
@@ -164,7 +156,7 @@ func masterStore(db *KV) error {
 }
 
 func (db *KV) pageNew(node []byte) uint64 {
-	checkAssertion(len(node) <= BTREE_PAGE_SIZE)
+	Assert(len(node) <= BTREE_PAGE_SIZE)
 	ptr := uint64(0)
 	if db.page.nfree < db.free.Total() {
 		// reuse a deallocated page
@@ -186,7 +178,7 @@ func (db *KV) pageDel(ptr uint64) {
 
 // callback for FreeList, allocate a new page.
 func (db *KV) pageAppend(node BNode) uint64 {
-	checkAssertion(len(node) <= BTREE_PAGE_SIZE)
+	Assert(len(node) <= BTREE_PAGE_SIZE)
 	ptr := db.page.flushed + uint64(db.page.nappend)
 	db.page.nappend++
 	db.page.updates[ptr] = node
@@ -248,8 +240,8 @@ func (db *KV) Open() error {
 	db.free.get = db.pageGet
 	db.free.new = db.pageAppend
 	db.free.use = db.pageUse
-	db.page.nappend = 0
-	db.page.nfree = 0
+	// db.page.nappend = 0
+	// db.page.nfree = 0
 	// free list
 	// read the master page
 	err = masterLoad(db)
@@ -269,7 +261,7 @@ func (db *KV) Close() {
 
 	for _, chunk := range db.mmap.chunks {
 		err := syscall.Munmap(chunk)
-		checkAssertion(err == nil)
+		Assert(err == nil)
 	}
 	db.fp.Close()
 }
@@ -405,7 +397,7 @@ func Bnode_to_string(b BNode, id uint64) string {
 	var str string
 	str += fmt.Sprintf("(%d)", id)
 	for i := uint16(0); i < b.Nkeys(); i++ {
-		str += fmt.Sprintf("%d,%d ||||", len(b.GetKey(i)), len(b.GetVal(i)))
+		str += fmt.Sprintf("%x,%s ||||", b.GetKey(i), b.GetVal(i))
 	}
 	return str
 }
@@ -427,4 +419,7 @@ func (c *KV) Debug(log string) {
 	a := BNode(c.page.updates[c.tree.Root])
 	Print_Btree(&a, c, f, c.tree.Root)
 	fmt.Println(f)
+}
+func (kv *KV) GetTree() *BTree {
+	return &kv.tree
 }
